@@ -100,11 +100,21 @@ def main():
         example.pop("points")
 
         example["shape"] = torch.tensor(example["shape"], dtype=torch.int32, device=gpu_device)
-        model(example)
-        torch.onnx.export(model.reader, (example["voxels"],example["num_voxels"],example["coordinates"]),"onnx_model/pfe.onnx",opset_version=11)
+        out = model(example)
+        torch.onnx.export(model.reader,
+                          (example["voxels"],
+                           example["num_voxels"],
+                           example["coordinates"]),
+                          "onnx_model/pfe.onnx",
+                          opset_version=12)
         
-        rpn_input  = torch.zeros((1,64,512,512),dtype=torch.float32,device=gpu_device)
-        torch.onnx.export(pp_model, rpn_input,"onnx_model/rpn.onnx",opset_version=11)
+        rpn_input = torch.zeros((1, 64, 512, 512),
+                                dtype=torch.float32,
+                                device=gpu_device)
+        torch.onnx.export(pp_model,
+                          rpn_input,
+                          "onnx_model/rpn.onnx",
+                          opset_version=12)
     print("Done")
 
 

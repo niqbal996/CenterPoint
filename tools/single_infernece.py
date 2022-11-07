@@ -7,7 +7,9 @@ import json
 import os
 import sys
 import torch
-import time 
+import time
+import onnxruntime
+import onnx
 
 from std_msgs.msg import Header
 import sensor_msgs.point_cloud2 as pc2
@@ -15,7 +17,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 from jsk_recognition_msgs.msg import BoundingBox, BoundingBoxArray
 from pyquaternion import Quaternion
 
-from det3d import __version__, torchie
+from det3d import torchie
 from det3d.models import build_detector
 from det3d.torchie import Config
 from det3d.core.input.voxel_generator import VoxelGenerator
@@ -70,7 +72,7 @@ def remove_low_score_nu(image_anno, thresh):
 
 
 class Processor_ROS:
-    def __init__(self, config_path, model_path):
+    def __init__(self, config_path, model_path, onnx=False, onnx_path=''):
         self.points = None
         self.config_path = config_path
         self.model_path = model_path
@@ -78,18 +80,30 @@ class Processor_ROS:
         self.net = None
         self.voxel_generator = None
         self.inputs = None
+        self.onnx = onnx
+        self.onnx_path = onnx_path
         
     def initialize(self):
         self.read_config()
-        
+
+    def onnx_session(self, model: str) -> onnxruntime.InferenceSession:
+        # Create an ONNX Runtime session with the provided model
+        providers = ['CPUExecutionProvider']
+        if torch.cuda.is_available():
+            providers.insert(0, 'CUDAExecutionProvider')
+        return onnxruntime.InferenceSession(model, providers=providers)
+
+
     def read_config(self):
         config_path = self.config_path
         cfg = Config.fromfile(self.config_path)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.net = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
-        self.net.load_state_dict(torch.load(self.model_path)["state_dict"])
-        self.net = self.net.to(self.device).eval()
-
+        if not self.onnx:
+            self.net = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
+            self.net.load_state_dict(torch.load(self.model_path)["state_dict"])
+            self.net = self.net.to(self.device).eval()
+        else:
+            self.net = self.onnx_session(self.onnx_path)
         self.range = cfg.voxel_generator.range
         self.voxel_size = cfg.voxel_generator.voxel_size
         self.max_points_in_voxel = cfg.voxel_generator.max_points_in_voxel
@@ -98,7 +112,7 @@ class Processor_ROS:
             voxel_size=self.voxel_size,
             point_cloud_range=self.range,
             max_num_points=self.max_points_in_voxel,
-            max_voxels=self.max_voxel_num,
+            max_voxels=self.max_voxel_num[0],
         )
 
     def run(self, points):
@@ -106,8 +120,9 @@ class Processor_ROS:
         print(f"input points shape: {points.shape}")
         num_features = 5        
         self.points = points.reshape([-1, num_features])
-        self.points[:, 4] = 0 # timestamp value 
-        
+        self.points[:, 4] = 0 # timestamp value
+        self.points = self.points[:, :4]
+
         voxels, coords, num_points = self.voxel_generator.generate(self.points)
         num_voxels = np.array([voxels.shape[0]], dtype=np.int64)
         grid_size = self.voxel_generator.grid_size
@@ -117,21 +132,37 @@ class Processor_ROS:
         coords = torch.tensor(coords, dtype=torch.int32, device=self.device)
         num_points = torch.tensor(num_points, dtype=torch.int32, device=self.device)
         num_voxels = torch.tensor(num_voxels, dtype=torch.int32, device=self.device)
-        
-        self.inputs = dict(
-            voxels = voxels,
-            num_points = num_points,
-            num_voxels = num_voxels,
-            coordinates = coords,
-            shape = [grid_size]
-        )
         torch.cuda.synchronize()
         t = time.time()
+        if self.onnx:
+            self.inputs = dict(
+                voxels=voxels.cpu().numpy(),
+                num_points=num_points.cpu().numpy(),
+                coors=coords.cpu().numpy(),
+                # coordinates=coords,
+                # shape=[grid_size]
+            )
+            # dummy = np.zeros((1, 10, 30000, 20), dtype=np.float32)
+            outputs = self.net.run(None, {'voxels': voxels.cpu().numpy(),
+                                          'coors': coords.cpu().numpy(),
+                                          'num_points': num_points.cpu().numpy(),
+                                          'num_voxels':num_voxels.cpu().numpy()})
+            # outputs = self.net.run(None, {'voxels': voxels.cpu().numpy(),
+            #                               'coors': coords.cpu().numpy(),
+            #                               'num_points': num_points.cpu().numpy()})
+            # outputs = self.net.run(None, self.inputs)
+        else:
+            self.inputs = dict(
+                voxels=voxels,
+                num_points=num_points,
+                num_voxels=num_voxels,
+                coordinates=coords,
+                shape=[grid_size]
+            )
+            with torch.no_grad():
+                outputs = self.net(self.inputs, return_loss=False)[0]
 
-        with torch.no_grad():
-            outputs = self.net(self.inputs, return_loss=False)[0]
-    
-        # print(f"output: {outputs}")
+        print(f"output: {outputs}")
         
         torch.cuda.synchronize()
         print("  network predict time cost:", time.time() - t)
@@ -150,7 +181,7 @@ class Processor_ROS:
 
         return scores, boxes_lidar, types
 
-def get_xyz_points(cloud_array, remove_nans=True, dtype=np.float):
+def get_xyz_points(cloud_array, remove_nans=True, dtype=float):
     '''
     '''
     if remove_nans:
@@ -218,7 +249,7 @@ def rslidar_callback(msg):
     print("total callback time: ", time.time() - t_t)
     arr_bbox.header.frame_id = msg.header.frame_id
     arr_bbox.header.stamp = msg.header.stamp
-    if len(arr_bbox.boxes) is not 0:
+    if len(arr_bbox.boxes) != 0:
         pub_arr_bbox.publish(arr_bbox)
         arr_bbox.boxes = []
     else:
@@ -229,11 +260,14 @@ if __name__ == "__main__":
 
     global proc
     ## CenterPoint
-    config_path = 'configs/centerpoint/nusc_centerpoint_pp_02voxel_circle_nms_demo.py'
-    model_path = 'models/last.pth'
+    # config_path = 'configs/centerpoint/nusc_centerpoint_pp_02voxel_circle_nms_demo.py'
+    config_path = 'configs/nusc/pp/nusc_centerpoint_pp_02voxel_two_pfn_10sweep.py'
+    model_path = 'latest.pth'
 
-    proc_1 = Processor_ROS(config_path, model_path)
-    
+    proc_1 = Processor_ROS(config_path, model_path,
+                           # onnx=True, onnx_path='/home/niqbal/git/CenterPoint/model.onnx')
+                           onnx=True, onnx_path='/home/niqbal/git/CenterPoint/onnx_model/pointpillars.onnx')
+
     proc_1.initialize()
     
     rospy.init_node('centerpoint_ros_node')
@@ -243,9 +277,10 @@ if __name__ == "__main__":
                         "/lidar_protector/merged_cloud", 
                         "/merged_cloud",
                         "/lidar_top", 
-                        "/roi_pclouds"]
+                        "/roi_pclouds",
+                        "/ai_test_field/sensors/os_cloud_node/points"]
     
-    sub_ = rospy.Subscriber(sub_lidar_topic[5], PointCloud2, rslidar_callback, queue_size=1, buff_size=2**24)
+    sub_ = rospy.Subscriber(sub_lidar_topic[7], PointCloud2, rslidar_callback, queue_size=1, buff_size=2**24)
     
     pub_arr_bbox = rospy.Publisher("pp_boxes", BoundingBoxArray, queue_size=1)
 

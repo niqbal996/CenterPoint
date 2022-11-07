@@ -15,7 +15,7 @@ def make_scatterND(model, rpn_input_shape, indices_shape, pfe_out_maxpool_name, 
     
     transpose_node_1 = helper.make_node(op_type="Transpose", inputs=['pfe_squeeze_1',], \
                                         outputs=['pfe_transpose_1'], name="pfe_Transpose_1", \
-                                        perm=[0,2,1])
+                                        perm=[0, 2, 1])
     
     if save_for_trt:
         scatter_node = helper.make_node(op_type="ScatterND", inputs=['scatter_data', 'indices_input', 'pfe_transpose_1'], \
@@ -27,7 +27,7 @@ def make_scatterND(model, rpn_input_shape, indices_shape, pfe_out_maxpool_name, 
     transpose_node_2 = helper.make_node(op_type="Transpose", inputs=['scatter_1',], \
                                         outputs=['pfe_transpose_2'], \
                                         name="pfe_Transpose_2", perm=[0,2,1])
-    reshape_node = helper.make_node(op_type="Reshape", inputs=["pfe_transpose_2","pfe_reshape_shape"], \
+    reshape_node = helper.make_node(op_type="Reshape", inputs=["pfe_transpose_2", "pfe_reshape_shape"], \
                                     outputs=['rpn_input'], name="pfe_reshape_1")
     
     squeeze_axes = [3]
@@ -73,8 +73,8 @@ if __name__ == "__main__":
     batch_size = 1
     rpn_input_conv_name = "Conv_15"
     pfe_out_maxpool_name = "46"
-    rpn_input_shape = [batch_size,64,512,512]
-    indices_shape = [batch_size, 30000,2]
+    rpn_input_shape = [batch_size, 64, 512, 512]
+    indices_shape = [batch_size, 30000, 2]
 
 
     for node in pfe_model.graph.node:

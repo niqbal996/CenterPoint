@@ -82,7 +82,7 @@ test_cfg = dict(
 
 # dataset settings
 dataset_type = "NuScenesDataset"
-nsweeps = 10
+nsweeps = 1
 data_root = "data/nuScenes"
 
 db_sampler = dict(
@@ -138,8 +138,8 @@ val_preprocessor = dict(
 voxel_generator = dict(
     range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
     voxel_size=[0.2, 0.2, 8],
-    max_points_in_voxel=20,
-    max_voxel_num=[30000, 60000],
+    max_points_in_voxel=64,
+    max_voxel_num=[20000, 60000],
 )
 
 train_pipeline = [
@@ -159,13 +159,13 @@ test_pipeline = [
     dict(type="Reformat"),
 ]
 
-train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
-val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
+train_anno = "/media/niqbal/T7/datasets/NuScenes/v1.0-mini/infos_train_10sweeps_withvelo_filter_True.pkl"
+val_anno = "/media/niqbal/T7/datasets/NuScenes/v1.0-mini/infos_val_10sweeps_withvelo_filter_True.pkl"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=4,
-    workers_per_gpu=8,
+    samples_per_gpu=1,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         root_path=data_root,
